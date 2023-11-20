@@ -22,6 +22,8 @@
 #include "segment.h"
 #include "node.h"
 #include "gc.h"
+#include "hc.h"
+#include "kmeans.h"
 #include "iostat.h"
 #include <trace/events/f2fs.h>
 
@@ -3337,8 +3339,20 @@ void f2fs_update_device_state(struct f2fs_sb_info *sbi, nid_t ino,
 
 static void do_write_page(struct f2fs_summary *sum, struct f2fs_io_info *fio)
 {
-	int type = __get_segment_type(fio);
-	bool keep_order = (f2fs_lfs_mode(fio->sbi) && type == CURSEG_COLD_DATA);
+	int type;
+	bool keep_order;
+	int type_old;
+	__u64 value;
+
+	if (fio->type == DATA && (!page_private_gcing(fio->page))) {
+		type = hotness_decide(fio, &type_old, &value);
+	} else {
+		type = __get_segment_type(fio);
+	}
+
+	keep_order = (f2fs_lfs_mode(fio->sbi) && type == CURSEG_COLD_DATA);
+	// int type = __get_segment_type(fio);
+	// bool keep_order = (f2fs_lfs_mode(fio->sbi) && type == CURSEG_COLD_DATA);
 
 	if (keep_order)
 		f2fs_down_read(&fio->sbi->io_order_lock);
@@ -3349,6 +3363,7 @@ reallocate:
 		invalidate_mapping_pages(META_MAPPING(fio->sbi),
 					fio->old_blkaddr, fio->old_blkaddr);
 		f2fs_invalidate_compress_page(fio->sbi, fio->old_blkaddr);
+		stat_inc_outplace_blocks(fio->sbi);
 	}
 
 	/* writeout dirty page into bdev */
@@ -3357,6 +3372,9 @@ reallocate:
 		fio->old_blkaddr = fio->new_blkaddr;
 		goto reallocate;
 	}
+	if (fio->type == DATA && (!page_private_gcing(fio->page))) {
+		hotness_maintain(fio, type_old, type, value);
+    }
 
 	f2fs_update_device_state(fio->sbi, fio->ino, fio->new_blkaddr, 1);
 
@@ -3420,10 +3438,20 @@ int f2fs_inplace_write_data(struct f2fs_io_info *fio)
 	int err;
 	struct f2fs_sb_info *sbi = fio->sbi;
 	unsigned int segno;
-
+	int type;
+	int type_old;
+	__u64 value;
 	fio->new_blkaddr = fio->old_blkaddr;
 	/* i/o temperature is needed for passing down write hints */
-	__get_segment_type(fio);
+	// __get_segment_type(fio);
+
+	if (fio->type == DATA && (!page_private_gcing(fio->page))) {
+		type = hotness_decide(fio, &type_old, &value);
+		hotness_maintain(fio, type_old, type, value);
+	} else {
+		__get_segment_type(fio);
+	}
+	// __get_segment_type(fio);
 
 	segno = GET_SEGNO(sbi, fio->new_blkaddr);
 

@@ -1599,6 +1599,24 @@ struct decompress_io_ctx {
 #define MIN_COMPRESS_LOG_SIZE		2
 #define MAX_COMPRESS_LOG_SIZE		8
 #define MAX_COMPRESS_WINDOW_SIZE(log_size)	((PAGE_SIZE) << (log_size))
+#define N_CLUSTERS 3
+#define TEMP_TYPE_NUM 3
+
+/* 热度元数据组织 */
+struct hotness_info {
+	struct xarray hotness_rt_array[TEMP_TYPE_NUM]; 
+
+	unsigned int count; // number of hotness entry
+	unsigned int new_blk_cnt;
+	unsigned int upd_blk_cnt;
+	unsigned int rmv_blk_cnt;
+	unsigned int ipu_blk_cnt;
+	unsigned int opu_blk_cnt;
+	// 记录3种温度类别的一些信息
+	unsigned int counts[TEMP_TYPE_NUM];
+	unsigned int IRR_min[TEMP_TYPE_NUM];
+	unsigned int IRR_max[TEMP_TYPE_NUM];
+};
 
 struct f2fs_sb_info {
 	struct super_block *sb;			/* pointer to VFS super block */
@@ -1752,6 +1770,7 @@ struct f2fs_sb_info {
 	unsigned int segment_count[2];		/* # of allocated segments */
 	unsigned int block_count[2];		/* # of allocated blocks */
 	atomic_t inplace_count;		/* # of inplace update */
+	atomic_t outplace_count;
 	atomic64_t total_hit_ext;		/* # of lookup extent cache */
 	atomic64_t read_hit_rbtree;		/* # of hit rbtree extent node */
 	atomic64_t read_hit_largest;		/* # of hit largest extent node */
@@ -1839,6 +1858,15 @@ struct f2fs_sb_info {
 	unsigned int compress_watermark;	/* cache page watermark */
 	atomic_t compress_page_hit;		/* cache hit count */
 #endif
+
+	/* hotness clustering */
+	struct hotness_info *hi;
+	block_t total_writed_block_count; // warm data block write count
+    unsigned int n_clusters;
+    unsigned int *centers; // hot, warm, cold in order
+	int centers_valid;
+    struct f2fs_hc_kthread *hc_thread;
+	struct radix_tree_root hotness_rt_array[3]; 
 
 #ifdef CONFIG_F2FS_IOSTAT
 	/* For app/fs IO statistics */
@@ -3820,6 +3848,14 @@ void f2fs_build_gc_manager(struct f2fs_sb_info *sbi);
 int f2fs_resize_fs(struct f2fs_sb_info *sbi, __u64 block_count);
 int __init f2fs_create_garbage_collection_cache(void);
 void f2fs_destroy_garbage_collection_cache(void);
+/*
+ * hc.c
+ */
+int f2fs_start_hc_thread(struct f2fs_sb_info *sbi);
+void f2fs_stop_hc_thread(struct f2fs_sb_info *sbi);
+void f2fs_build_hc_manager(struct f2fs_sb_info *sbi);
+unsigned int get_segment_hotness_avg(struct f2fs_sb_info *sbi, unsigned int segno);
+bool hc_can_inplace_update(struct f2fs_io_info *fio);
 
 /*
  * recovery.c
@@ -3883,6 +3919,7 @@ struct f2fs_stat_info {
 	unsigned int segment_count[2];
 	unsigned int block_count[2];
 	unsigned int inplace_count;
+	unsigned int outplace_count;
 	unsigned long long base_mem, cache_mem, page_mem;
 };
 
@@ -3964,6 +4001,8 @@ static inline struct f2fs_stat_info *F2FS_STAT(struct f2fs_sb_info *sbi)
 		((sbi)->block_count[(curseg)->alloc_type]++)
 #define stat_inc_inplace_blocks(sbi)					\
 		(atomic_inc(&(sbi)->inplace_count))
+#define stat_inc_outplace_blocks(sbi)					\
+		(atomic_inc(&(sbi)->outplace_count))
 #define stat_update_max_atomic_write(inode)				\
 	do {								\
 		int cur = F2FS_I_SB(inode)->atomic_files;	\
@@ -4036,6 +4075,7 @@ void f2fs_update_sit_info(struct f2fs_sb_info *sbi);
 #define stat_inc_seg_type(sbi, curseg)			do { } while (0)
 #define stat_inc_block_count(sbi, curseg)		do { } while (0)
 #define stat_inc_inplace_blocks(sbi)			do { } while (0)
+#define stat_inc_outplace_blocks(sbi)			do { } while (0)
 #define stat_inc_seg_count(sbi, type, gc_type)		do { } while (0)
 #define stat_inc_tot_blk_count(si, blks)		do { } while (0)
 #define stat_inc_data_blk_count(sbi, blks, gc_type)	do { } while (0)

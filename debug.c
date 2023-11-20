@@ -19,6 +19,7 @@
 #include "node.h"
 #include "segment.h"
 #include "gc.h"
+#include "hc.h"
 
 static LIST_HEAD(f2fs_stat_list);
 static DEFINE_RAW_SPINLOCK(f2fs_stat_lock);
@@ -209,6 +210,7 @@ static void update_general_status(struct f2fs_sb_info *sbi)
 	}
 
 	si->inplace_count = atomic_read(&sbi->inplace_count);
+	si->outplace_count = atomic_read(&sbi->outplace_count);
 }
 
 /*
@@ -549,6 +551,7 @@ static int stat_show(struct seq_file *s, void *v)
 		seq_printf(s, "IPU: %u blocks\n", si->inplace_count);
 		seq_printf(s, "SSR: %u blocks in %u segments\n",
 			   si->block_count[SSR], si->segment_count[SSR]);
+		seq_printf(s, "OPU: %u blocks\n", si->outplace_count);	   
 		seq_printf(s, "LFS: %u blocks in %u segments\n",
 			   si->block_count[LFS], si->segment_count[LFS]);
 
@@ -567,6 +570,21 @@ static int stat_show(struct seq_file *s, void *v)
 				si->cache_mem >> 10);
 		seq_printf(s, "  - paged : %llu KB\n",
 				si->page_mem >> 10);
+		seq_printf(s, "new_blk_cnt = %u\n", si->sbi->hi->new_blk_cnt);
+		seq_printf(s, "upd_blk_cnt = %u\n", si->sbi->hi->upd_blk_cnt);
+		seq_printf(s, "opu_blk_cnt = %u\n", si->sbi->hi->opu_blk_cnt);
+		seq_printf(s, "ipu_blk_cnt = %u\n", si->sbi->hi->ipu_blk_cnt);
+		seq_printf(s, "rmv_blk_cnt = %u\n", si->sbi->hi->rmv_blk_cnt);
+		if(si->sbi->centers_valid) {
+			for (j = 0; j < si->sbi->n_clusters; ++j) {
+				seq_printf(s, "centers[%u] = %u, ", j, si->sbi->centers[j]);
+			}
+			seq_printf(s, "\n");
+		}
+		seq_printf(s, "hot : count = %u, IRR_min = %u, IRR_max = %u\n", si->sbi->hi->counts[HOT], si->sbi->hi->IRR_min[HOT], si->sbi->hi->IRR_max[HOT]);
+		seq_printf(s, "warm: count = %u, IRR_min = %u, IRR_max = %u\n", si->sbi->hi->counts[WARM], si->sbi->hi->IRR_min[WARM], si->sbi->hi->IRR_max[WARM]);
+		seq_printf(s, "cold: count = %u, IRR_min = %u, IRR_max = %u\n", si->sbi->hi->counts[COLD], si->sbi->hi->IRR_min[COLD], si->sbi->hi->IRR_max[COLD]);
+
 	}
 	raw_spin_unlock_irqrestore(&f2fs_stat_lock, flags);
 	return 0;
@@ -608,6 +626,7 @@ int f2fs_build_stats(struct f2fs_sb_info *sbi)
 	atomic_set(&sbi->compr_inode, 0);
 	atomic64_set(&sbi->compr_blocks, 0);
 	atomic_set(&sbi->inplace_count, 0);
+	atomic_set(&sbi->outplace_count, 0);
 	for (i = META_CP; i < META_MAX; i++)
 		atomic_set(&sbi->meta_count[i], 0);
 
